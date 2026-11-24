@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "ZETA App Light Theme",
+  "version": "4.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "theme@zetatools.local"
+    }
+  },
+  "host_permissions": [
+    "https://zeta-ai.io/*",
+    "https://frame.pingpong.ai/v1/index.html*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://zeta-ai.io/*",
+        "https://frame.pingpong.ai/v1/index.html*"
+      ],
+      "js": [
+        "theme.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}

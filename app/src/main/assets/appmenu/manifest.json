@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "ZETA App settings entry",
+  "version": "1.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "appmenu@zetatools.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://zeta-ai.io/*"
+      ],
+      "js": [
+        "menu.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
