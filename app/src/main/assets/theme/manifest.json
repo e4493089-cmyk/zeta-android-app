@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZETA App Light Theme",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "browser_specific_settings": {
     "gecko": {
       "id": "theme@zetatools.local"
@@ -16,11 +16,16 @@
         "https://zeta-ai.io/*"
       ],
       "js": [
-        "theme.js"
+        "theme-default.js",
+        "theme-loader.js"
       ],
       "run_at": "document_start",
-      "all_frames": false,
-      "world": "MAIN"
+      "all_frames": false
     }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons"
   ]
 }

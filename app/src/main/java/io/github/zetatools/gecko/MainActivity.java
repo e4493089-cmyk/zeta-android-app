@@ -35,10 +35,14 @@ public class MainActivity extends Activity {
     private int mode;
     private WebExtension theme;
     private boolean themeBusy=false,themeEnabled=false;
+    private boolean checkingTheme=false,initialPagePending=true;
+    private ThemeStore.Data activeTheme;
+    private final Set<WebExtension.Port> themePorts=new HashSet<>();
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         prefs=getSharedPreferences("settings",MODE_PRIVATE);
+        activeTheme=ThemeStore.initial(this,prefs);
         mode=prefs.getInt("screen",0);
         if(runtime==null)runtime=GeckoRuntime.create(getApplicationContext(),new GeckoRuntimeSettings.Builder().remoteDebuggingEnabled(false).build());
         LinearLayout layout=new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
@@ -51,10 +55,69 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(36),dp(44),Gravity.TOP|Gravity.END);p.topMargin=dp(8);p.rightMargin=dp(4);frame.addView(menu,p);menu.setOnClickListener(v->settings());
         layout.addView(frame,new LinearLayout.LayoutParams(-1,0,1));setContentView(layout);
         getWindow().setStatusBarColor(0xff252525);getWindow().setNavigationBarColor(0xff252525);
-        main=createSession();main.open(runtime);show(main);locations.put(main,HOME);main.loadUri(HOME);updateChrome();
-        installTheme(true);
+        main=createSession();main.open(runtime);locations.put(main,HOME);show(main);
+        installTheme(false);
         installMenu();
         if(prefs.getBoolean("autoUpdate",true)){checkUpdate(false);}
+    }
+    @Override protected void onStart(){
+        super.onStart();
+        if(prefs!=null)refreshTheme(false);
+    }
+    private void finishInitialPage(){
+        if(initialPagePending && !isDestroyed()){
+            initialPagePending=false;
+            main.loadUri(HOME);
+            updateChrome();
+        }
+    }
+    private boolean trustedThemeSender(WebExtension.MessageSender sender){
+        if(sender==null || sender.session!=main || !sender.isTopLevel() ||
+            sender.environmentType!=WebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT)return false;
+        Uri u=Uri.parse(sender.url);
+        return "https".equals(u.getScheme()) && "zeta-ai.io".equals(u.getHost()) && (u.getPort()==-1 || u.getPort()==443);
+    }
+    private void bindTheme(WebExtension extension){
+        main.getWebExtensionController().setMessageDelegate(extension,new WebExtension.MessageDelegate(){
+            @Override public void onConnect(WebExtension.Port port){
+                if(!trustedThemeSender(port.sender)){port.disconnect();return;}
+                themePorts.add(port);
+                port.setDelegate(new WebExtension.PortDelegate(){
+                    @Override public void onPortMessage(Object message,WebExtension.Port p){
+                        if(message instanceof JSONObject && "ready".equals(((JSONObject)message).optString("type")) && activeTheme!=null){
+                            try{p.postMessage(activeTheme.json());}catch(Exception ignored){}
+                        }
+                    }
+                    @Override public void onDisconnect(WebExtension.Port p){themePorts.remove(p);}
+                });
+            }
+        },"zeta_theme");
+    }
+    private void pushTheme(){
+        if(activeTheme==null)return;
+        for(WebExtension.Port p:new ArrayList<>(themePorts)){
+            try{p.postMessage(activeTheme.json());}catch(Exception e){themePorts.remove(p);}
+        }
+    }
+    private void refreshTheme(boolean manual){
+        if(checkingTheme){if(manual)toast("테마 업데이트 확인 중입니다.");return;}
+        checkingTheme=true;
+        if(manual)toast("테마 업데이트 확인 중");
+        new Thread(()->{
+            ThemeStore.Data data=null;
+            try{data=ThemeStore.fetch();}catch(Exception ignored){}
+            final ThemeStore.Data downloaded=data;
+            runOnUiThread(()->{
+                checkingTheme=false;
+                if(isDestroyed()||isFinishing())return;
+                if(downloaded==null){if(manual)toast("테마 업데이트 실패 · 기존 테마 유지");return;}
+                boolean changed=!downloaded.same(activeTheme);
+                activeTheme=downloaded;
+                prefs.edit().putString("remoteThemeVersion",downloaded.version).putString("remoteThemeCss",downloaded.css).apply();
+                if(changed)pushTheme();
+                if(manual)toast(changed?"테마 "+downloaded.version+" 갱신 완료":"최신 테마입니다 · "+downloaded.version);
+            });
+        },"zeta-theme-update").start();
     }
     private GeckoSession createSession(){
         GeckoSession s=new GeckoSession();tabs.add(s);
@@ -127,16 +190,17 @@ public class MainActivity extends Activity {
             runOnUiThread(()->{
                 if(isDestroyed())return;
                 theme=ext;
+                bindTheme(ext);
                 boolean on=prefs.getBoolean("theme",true);
                 setTheme(on,reload);
             });
-        },err->runOnUiThread(()->{themeBusy=false;if(!isDestroyed())toast("테마 설치 실패 · 로그인 테스트는 가능");}));
+        },err->runOnUiThread(()->{themeBusy=false;if(!isDestroyed()){toast("테마 설치 실패 · 제타는 사용할 수 있습니다.");finishInitialPage();}}));
     }
     private void setTheme(boolean on,boolean reload){
         if(theme==null){themeBusy=false;return;}
         WebExtensionController c=runtime.getWebExtensionController();
         GeckoResult<WebExtension> action=on?c.enable(theme,WebExtensionController.EnableSource.USER):c.disable(theme,WebExtensionController.EnableSource.USER);
-        action.accept(ext->runOnUiThread(()->{if(isDestroyed())return;theme=ext;themeBusy=false;themeEnabled=on;prefs.edit().putBoolean("theme",on).apply();if(reload && current==main && ownPage()){main.reload();}}),err->runOnUiThread(()->{themeBusy=false;if(!isDestroyed())toast("테마 설정 실패");}));
+        action.accept(ext->runOnUiThread(()->{if(isDestroyed())return;theme=ext;bindTheme(ext);themeBusy=false;themeEnabled=on;prefs.edit().putBoolean("theme",on).apply();if(initialPagePending){finishInitialPage();}else if(reload && current==main && ownPage()){main.reload();}}),err->runOnUiThread(()->{themeBusy=false;if(!isDestroyed()){toast("테마 설정 실패");finishInitialPage();}}));
     }
     private void applyScreen(){
         int flags=0;
@@ -221,7 +285,7 @@ public class MainActivity extends Activity {
         if(!tag.isEmpty())showUpdate(tag,prefs.getString("pendingUpdateLabel",tag));
     }
     private void settings(){
-        String[] options={"화면 모드","라이트 모드: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보","업데이트 확인","자동 업데이트 확인: "+(prefs.getBoolean("autoUpdate",true)?"켜짐":"꺼짐")};
+        String[] options={"화면 모드","라이트 모드: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보","업데이트 확인","자동 업데이트 확인: "+(prefs.getBoolean("autoUpdate",true)?"켜짐":"꺼짐"),"테마 업데이트 확인 · "+(activeTheme==null?"기본":activeTheme.version)};
         new AlertDialog.Builder(this).setTitle("ZETA Tools Gecko").setItems(options,(d,w)->{
             switch(w){
                 case 0:new AlertDialog.Builder(this).setTitle("화면 모드").setSingleChoiceItems(new String[]{"기본","확장","전체화면"},mode,(a,b)->{mode=b;prefs.edit().putInt("screen",b).apply();a.dismiss();applyScreen();}).setNegativeButton("닫기",null).show();break;
@@ -229,6 +293,7 @@ public class MainActivity extends Activity {
                 case 2:current.reload();break;
                 case 3:main.loadUri(HOME);show(main);break;
                 case 4:prefs.edit().putBoolean("awake",!prefs.getBoolean("awake",false)).apply();applyScreen();break;
+                case 8:refreshTheme(true);break;
                 case 6:checkUpdate(true);break;
                 case 7:boolean auto=!prefs.getBoolean("autoUpdate",true);prefs.edit().putBoolean("autoUpdate",auto).apply();if(auto)checkUpdate(false);else{prefs.edit().remove("pendingUpdate").remove("pendingUpdateLabel").apply();toast("자동 업데이트 확인 꺼짐");}break;
                 case 5:new AlertDialog.Builder(this).setTitle("ZETA Tools "+installedName()).setMessage("파이어폭스 엔진 기반 로그인 테스트 앱. 제타 공식 앱이 아닙니다. 계정 인증은 실제 웹사이트에서 진행하며, 쿠키를 외부로 복사하지 않습니다. 라이트 모드는 새 설치에서 기본 적용됩니다.").setPositiveButton("확인",null).show();break;
@@ -239,5 +304,5 @@ public class MainActivity extends Activity {
     private void back(){if(current!=main){closeTab(current);return;}if(Boolean.TRUE.equals(backs.get(current)))current.goBack();else new AlertDialog.Builder(this).setMessage("앱을 종료할까요?").setPositiveButton("종료",(d,w)->finish()).setNegativeButton("취소",null).setNeutralButton("앱 설정",(d,w)->settings()).show();}
     @Override public void onBackPressed(){back();}
     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&prefs!=null){applyScreen();showPendingUpdate();}}
-    @Override protected void onDestroy(){if(view!=null&&view.getSession()!=null)view.releaseSession();for(GeckoSession s:new ArrayList<>(tabs))if(s.isOpen())s.close();tabs.clear();super.onDestroy();}
+    @Override protected void onDestroy(){for(WebExtension.Port p:new ArrayList<>(themePorts)){try{p.disconnect();}catch(Exception ignored){}}themePorts.clear();if(view!=null&&view.getSession()!=null)view.releaseSession();for(GeckoSession s:new ArrayList<>(tabs))if(s.isOpen())s.close();tabs.clear();super.onDestroy();}
 }

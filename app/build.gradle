@@ -1,6 +1,6 @@
 plugins { id 'com.android.application' }
 def apkVersionCode = providers.gradleProperty('distributionCode').orElse('3').get().toInteger()
-def apkVersionName = providers.gradleProperty('distributionName').orElse('0.2.2').get()
+def apkVersionName = providers.gradleProperty('distributionName').orElse('0.2.3').get()
 android {
     namespace 'io.github.zetatools.gecko'
     compileSdk {

@@ -8,3 +8,6 @@ app/src/main/assets/theme/theme.js
 *.p12
 *signing-secret*
 dist/
+
+app/src/main/assets/theme/theme-default.js
+app/src/main/assets/theme/theme-default.json
