@@ -221,7 +221,7 @@ public class MainActivity extends Activity {
         if(!tag.isEmpty())showUpdate(tag,prefs.getString("pendingUpdateLabel",tag));
     }
     private void settings(){
-        String[] options={"화면 모드","카카오톡 테마: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보","업데이트 확인","자동 업데이트 확인: "+(prefs.getBoolean("autoUpdate",true)?"켜짐":"꺼짐")};
+        String[] options={"화면 모드","라이트 모드: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보","업데이트 확인","자동 업데이트 확인: "+(prefs.getBoolean("autoUpdate",true)?"켜짐":"꺼짐")};
         new AlertDialog.Builder(this).setTitle("ZETA Tools Gecko").setItems(options,(d,w)->{
             switch(w){
                 case 0:new AlertDialog.Builder(this).setTitle("화면 모드").setSingleChoiceItems(new String[]{"기본","확장","전체화면"},mode,(a,b)->{mode=b;prefs.edit().putInt("screen",b).apply();a.dismiss();applyScreen();}).setNegativeButton("닫기",null).show();break;
@@ -231,7 +231,7 @@ public class MainActivity extends Activity {
                 case 4:prefs.edit().putBoolean("awake",!prefs.getBoolean("awake",false)).apply();applyScreen();break;
                 case 6:checkUpdate(true);break;
                 case 7:boolean auto=!prefs.getBoolean("autoUpdate",true);prefs.edit().putBoolean("autoUpdate",auto).apply();if(auto)checkUpdate(false);else{prefs.edit().remove("pendingUpdate").remove("pendingUpdateLabel").apply();toast("자동 업데이트 확인 꺼짐");}break;
-                case 5:new AlertDialog.Builder(this).setTitle("ZETA Tools "+installedName()).setMessage("파이어폭스 엔진 기반 로그인 테스트 앱. 제타 공식 앱이 아닙니다. 계정 인증은 실제 웹사이트에서 진행하며, 쿠키를 외부로 복사하지 않습니다. 카카오톡 테마는 새 설치에서 기본 적용됩니다.").setPositiveButton("확인",null).show();break;
+                case 5:new AlertDialog.Builder(this).setTitle("ZETA Tools "+installedName()).setMessage("파이어폭스 엔진 기반 로그인 테스트 앱. 제타 공식 앱이 아닙니다. 계정 인증은 실제 웹사이트에서 진행하며, 쿠키를 외부로 복사하지 않습니다. 라이트 모드는 새 설치에서 기본 적용됩니다.").setPositiveButton("확인",null).show();break;
             }
         }).setOnDismissListener(d->applyScreen()).show();
     }
