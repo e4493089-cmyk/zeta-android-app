@@ -4,10 +4,15 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: zeta-android-distribution
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -36,10 +41,59 @@ jobs:
             sdkmanager --install 'platforms;android-37.0'
           fi
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
-      - name: Build APK
+      - name: Prepare private release signing
+        id: signing
+        env:
+          SIGNING_SECRET: ${{ secrets.ZETA_RELEASE_SIGNING }}
+        run: |
+          if [ -z "$SIGNING_SECRET" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release signing secret is not set; building a debug preview only."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os,json,base64,pathlib
+          s=json.loads(os.environ['SIGNING_SECRET'])
+          password=s['password']
+          assert password and '\n' not in password and '\r' not in password
+          print('::add-mask::'+password)
+          target=pathlib.Path(os.environ['RUNNER_TEMP'])/'zeta-release.p12'
+          target.write_bytes(base64.b64decode(s['keystore'],validate=True))
+          target.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('ZETA_SIGNING_FILE='+str(target)+'\nZETA_SIGNING_PASSWORD='+password+'\n')
+          PY
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Build debug preview
+        if: steps.signing.outputs.ready != 'true'
         run: gradle --no-daemon :app:assembleDebug
-      - uses: actions/upload-artifact@v4
+      - name: Upload debug preview
+        if: steps.signing.outputs.ready != 'true'
+        uses: actions/upload-artifact@v4
         with:
-          name: ZETA-Tools-Gecko-0.2.1-arm64
+          name: ZETA-Tools-Gecko-0.2.2-preview-arm64
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Build signed release
+        if: steps.signing.outputs.ready == 'true'
+        run: |
+          code=$((1000 + GITHUB_RUN_NUMBER))
+          name="0.2.2.${GITHUB_RUN_NUMBER}"
+          gradle --no-daemon :app:assembleRelease "-PdistributionCode=$code" "-PdistributionName=$name"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/zeta-tools.apk
+          test -s dist/zeta-tools.apk
+          echo "ZETA_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "ZETA_VERSION_NAME=$name" >> "$GITHUB_ENV"
+      - name: Publish signed APK
+        if: steps.signing.outputs.ready == 'true'
+        run: |
+          tag="android-$ZETA_VERSION_CODE"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::This immutable release already exists."
+            exit 0
+          fi
+          gh release create "$tag" dist/zeta-tools.apk --target "$GITHUB_SHA" --title "ZETA Tools v$ZETA_VERSION_NAME" --notes "자동 빌드: $GITHUB_SHA" --latest
+      - name: Clean up signing file
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/zeta-release.p12"

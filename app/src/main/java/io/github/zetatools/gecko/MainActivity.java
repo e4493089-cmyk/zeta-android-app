@@ -9,10 +9,19 @@ import android.view.*;
 import android.widget.*;
 import org.mozilla.geckoview.*;
 import java.util.*;
+import java.net.URL;
+import java.net.HttpURLConnection;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import org.json.*;
 
 public class MainActivity extends Activity {
     private static final String HOME="https://zeta-ai.io/ko";
     private static GeckoRuntime runtime;
+    private boolean checkingUpdate=false;
+    private static final String RELEASE_API="https://api.github.com/repos/e4493089-cmyk/zeta-android-app/releases/latest";
+    private static final String RELEASE_BASE="https://github.com/e4493089-cmyk/zeta-android-app/releases/download/";
     private GeckoView view;
     private GeckoSession main,current;
     private final ArrayList<GeckoSession> tabs=new ArrayList<>();
@@ -45,6 +54,7 @@ public class MainActivity extends Activity {
         main=createSession();main.open(runtime);show(main);locations.put(main,HOME);main.loadUri(HOME);updateChrome();
         installTheme(true);
         installMenu();
+        if(prefs.getBoolean("autoUpdate",true)){checkUpdate(false);}
     }
     private GeckoSession createSession(){
         GeckoSession s=new GeckoSession();tabs.add(s);
@@ -106,6 +116,7 @@ public class MainActivity extends Activity {
         // Show the actual origin, never the OAuth query or fragment.
         origin.setText(u.getHost()!=null?u.getScheme()+"://"+u.getHost()+(u.getPort()!=-1?":"+u.getPort():""):"새 창");
         applyScreen();
+        showPendingUpdate();
     }
     private void installMenu(){
         runtime.getWebExtensionController().ensureBuiltIn("resource://android/assets/appmenu/","appmenu@zetatools.local").accept(ext->{},err->runOnUiThread(()->{if(!isDestroyed())toast("프로필 설정 메뉴를 불러오지 못했습니다. 뒤로 가기 종료 창에서 설정을 열 수 있습니다.");}));
@@ -137,8 +148,80 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(flags);
         if(prefs.getBoolean("awake",false))getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
+    private long installedCode(){
+        try{android.content.pm.PackageInfo p=getPackageManager().getPackageInfo(getPackageName(),0);return Build.VERSION.SDK_INT>=28?p.getLongVersionCode():p.versionCode;}
+        catch(Exception e){return Long.MAX_VALUE;}
+    }
+    private String installedName(){
+        try{return getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){return "0.2.2";}
+    }
+    private void checkUpdate(boolean manual){
+        if(checkingUpdate){if(manual)toast("업데이트 확인 중입니다.");return;}
+        checkingUpdate=true;
+        if(manual)toast("최신 버전 확인 중");
+        new Thread(()->{
+            HttpURLConnection c=null;
+            String tag=null,version=null,error=null;
+            try{
+                c=(HttpURLConnection)new URL(RELEASE_API).openConnection();
+                c.setConnectTimeout(12000);c.setReadTimeout(12000);c.setInstanceFollowRedirects(false);
+                c.setRequestProperty("Accept","application/vnd.github+json");
+                c.setRequestProperty("User-Agent","ZETA-Tools-Android");
+                int status=c.getResponseCode();
+                if(status!=404){
+                    if(status!=200)throw new java.io.IOException("HTTP "+status);
+                    String body;
+                    try(InputStream in=c.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
+                        byte[] b=new byte[8192];int n,total=0;
+                        while((n=in.read(b))!=-1){total+=n;if(total>1024*1024)throw new java.io.IOException("response too large");out.write(b,0,n);}
+                        body=new String(out.toByteArray(),StandardCharsets.UTF_8);
+                    }
+                    JSONObject release=new JSONObject(body);
+                    String candidate=release.optString("tag_name");
+                    if(!release.optBoolean("draft")&&!release.optBoolean("prerelease")&&candidate.matches("android-[0-9]{1,9}")&&Long.parseLong(candidate.substring(8))>installedCode()){
+                        JSONArray assets=release.optJSONArray("assets");
+                        if(assets!=null)for(int i=0;i<assets.length();i++){
+                            JSONObject item=assets.getJSONObject(i);
+                            if("zeta-tools.apk".equals(item.optString("name"))&&"uploaded".equals(item.optString("state"))&&item.optLong("size")>0){
+                                tag=candidate;version=release.optString("name",candidate);break;
+                            }
+                        }
+                    }
+                }
+            }catch(Exception e){error="업데이트 확인 실패 · 기존 앱을 계속 사용할 수 있습니다.";}
+            finally{if(c!=null)c.disconnect();}
+            final String found=tag,label=version,problem=error;
+            runOnUiThread(()->{
+                checkingUpdate=false;
+                if(isDestroyed()||isFinishing())return;
+                if(problem!=null){if(manual)toast(problem);return;}
+                if(found==null){if(manual)toast("설치 가능한 새 정식 버전이 없습니다.");return;}
+                if(current!=main||!ownPage()||!hasWindowFocus()){
+                    prefs.edit().putString("pendingUpdate",found).putString("pendingUpdateLabel",label).apply();
+                    return;
+                }
+                if(!manual&&!prefs.getBoolean("autoUpdate",true))return;
+                showUpdate(found,label);
+            });
+        },"zeta-update-check").start();
+    }
+    private void showUpdate(String tag,String label){
+        if(!tag.matches("android-[0-9]{1,9}")||Long.parseLong(tag.substring(8))<=installedCode())return;
+        prefs.edit().remove("pendingUpdate").remove("pendingUpdateLabel").apply();
+        new AlertDialog.Builder(this).setTitle("새 업데이트가 있습니다")
+            .setMessage("현재 버전: "+installedName()+"\n새 버전: "+label+"\n\n업데이트 파일을 다운로드한 뒤 안드로이드 설치 화면에서 승인하세요.")
+            .setPositiveButton("업데이트",(d,w)->{
+                try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(RELEASE_BASE+tag+"/zeta-tools.apk")));}
+                catch(ActivityNotFoundException e){toast("다운로드할 브라우저를 찾을 수 없습니다.");}
+            }).setNegativeButton("나중에",null).show();
+    }
+    private void showPendingUpdate(){
+        if(prefs==null||!prefs.getBoolean("autoUpdate",true)||current!=main||!ownPage()||!hasWindowFocus())return;
+        String tag=prefs.getString("pendingUpdate","");
+        if(!tag.isEmpty())showUpdate(tag,prefs.getString("pendingUpdateLabel",tag));
+    }
     private void settings(){
-        String[] options={"화면 모드","카카오톡 테마: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보"};
+        String[] options={"화면 모드","카카오톡 테마: "+(themeEnabled?"켜짐":"꺼짐"),"새로고침","제타 홈","화면 꺼짐 방지: "+(prefs.getBoolean("awake",false)?"켜짐":"꺼짐"),"앱 정보","업데이트 확인","자동 업데이트 확인: "+(prefs.getBoolean("autoUpdate",true)?"켜짐":"꺼짐")};
         new AlertDialog.Builder(this).setTitle("ZETA Tools Gecko").setItems(options,(d,w)->{
             switch(w){
                 case 0:new AlertDialog.Builder(this).setTitle("화면 모드").setSingleChoiceItems(new String[]{"기본","확장","전체화면"},mode,(a,b)->{mode=b;prefs.edit().putInt("screen",b).apply();a.dismiss();applyScreen();}).setNegativeButton("닫기",null).show();break;
@@ -146,13 +229,15 @@ public class MainActivity extends Activity {
                 case 2:current.reload();break;
                 case 3:main.loadUri(HOME);show(main);break;
                 case 4:prefs.edit().putBoolean("awake",!prefs.getBoolean("awake",false)).apply();applyScreen();break;
-                case 5:new AlertDialog.Builder(this).setTitle("Gecko Preview 0.2.1").setMessage("파이어폭스 엔진 기반 로그인 테스트 앱. 제타 공식 앱이 아닙니다. 계정 인증은 실제 웹사이트에서 진행하며, 쿠키를 외부로 복사하지 않습니다. 카카오톡 테마는 새 설치에서 기본 적용됩니다.").setPositiveButton("확인",null).show();break;
+                case 6:checkUpdate(true);break;
+                case 7:boolean auto=!prefs.getBoolean("autoUpdate",true);prefs.edit().putBoolean("autoUpdate",auto).apply();if(auto)checkUpdate(false);else{prefs.edit().remove("pendingUpdate").remove("pendingUpdateLabel").apply();toast("자동 업데이트 확인 꺼짐");}break;
+                case 5:new AlertDialog.Builder(this).setTitle("ZETA Tools "+installedName()).setMessage("파이어폭스 엔진 기반 로그인 테스트 앱. 제타 공식 앱이 아닙니다. 계정 인증은 실제 웹사이트에서 진행하며, 쿠키를 외부로 복사하지 않습니다. 카카오톡 테마는 새 설치에서 기본 적용됩니다.").setPositiveButton("확인",null).show();break;
             }
         }).setOnDismissListener(d->applyScreen()).show();
     }
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     private void back(){if(current!=main){closeTab(current);return;}if(Boolean.TRUE.equals(backs.get(current)))current.goBack();else new AlertDialog.Builder(this).setMessage("앱을 종료할까요?").setPositiveButton("종료",(d,w)->finish()).setNegativeButton("취소",null).setNeutralButton("앱 설정",(d,w)->settings()).show();}
     @Override public void onBackPressed(){back();}
-    @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&prefs!=null)applyScreen();}
+    @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&prefs!=null){applyScreen();showPendingUpdate();}}
     @Override protected void onDestroy(){if(view!=null&&view.getSession()!=null)view.releaseSession();for(GeckoSession s:new ArrayList<>(tabs))if(s.isOpen())s.close();tabs.clear();super.onDestroy();}
 }

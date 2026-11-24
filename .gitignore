@@ -4,3 +4,7 @@ local.properties
 *.jks
 *.keystore
 app/src/main/assets/theme/theme.js
+
+*.p12
+*signing-secret*
+dist/
